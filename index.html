@@ -34,14 +34,16 @@
       </div>
 
       <aside class="settings">
-        <h2>키워드 매칭 규칙</h2>
-        <ul class="rules">
-          <li>상품명 / 필수선택 / 추가구성 → 내용</li>
-          <li>규격 → 개</li>
-          <li>수량 → 수량</li>
-          <li>예상단가 → 공급가액 ÷ 수량</li>
-          <li>할인금액은 계산에서 제외</li>
-        </ul>
+        <h2>사용법</h2>
+        <ol class="usage-list">
+          <li>G마켓 견적서 엑셀파일 첨부 후 추출</li>
+          <li>품목 내역 엑셀로 저장</li>
+          <li>에듀파인 품의 등록 화면에서 '품목내역' 항목에 있는 파일 업로드 버튼 클릭하여 파일 업로드</li>
+        </ol>
+        <div class="notice">
+          <strong>주의사항</strong>
+          <p>오류가 있을 수 있으니 결과물 검토 후 품의 바랍니다.</p>
+        </div>
       </aside>
     </section>
 
@@ -52,8 +54,6 @@
           <h2 id="resultTitle">품목 0개</h2>
         </div>
         <div class="export-actions">
-          <button id="copyJson" type="button" class="secondary" disabled>JSON 복사</button>
-          <button id="downloadCsv" type="button" class="secondary" disabled>CSV 저장</button>
           <button id="downloadEdufine" type="button" class="secondary" disabled>품목내역 엑셀 저장</button>
         </div>
       </div>

@@ -226,12 +226,30 @@ button.ghost {
   margin-bottom: 14px;
 }
 
-.rules {
+.usage-list {
   display: grid;
   gap: 10px;
   margin: 16px 0 0;
   padding-left: 20px;
   color: var(--muted);
+  line-height: 1.45;
+}
+
+.notice {
+  margin-top: 18px;
+  padding: 12px;
+  border: 1px solid #efd9a8;
+  border-radius: 8px;
+  background: #fff8e6;
+  color: #6f4b00;
+}
+
+.notice strong {
+  display: block;
+  margin-bottom: 5px;
+}
+
+.notice p {
   line-height: 1.45;
 }
 

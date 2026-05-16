@@ -15,8 +15,6 @@ const els = {
   status: document.querySelector("#status"),
   resultTitle: document.querySelector("#resultTitle"),
   resultBody: document.querySelector("#resultBody"),
-  copyJson: document.querySelector("#copyJson"),
-  downloadCsv: document.querySelector("#downloadCsv"),
   downloadEdufine: document.querySelector("#downloadEdufine"),
   debugLog: document.querySelector("#debugLog"),
 };
@@ -59,22 +57,6 @@ els.dropzone.addEventListener("drop", (event) => {
 
 els.extract.addEventListener("click", extractWorkbook);
 els.clear.addEventListener("click", clearResults);
-
-els.copyJson.addEventListener("click", async () => {
-  await navigator.clipboard.writeText(JSON.stringify(state.rows, null, 2));
-  setStatus("JSON을 클립보드에 복사했습니다.");
-});
-
-els.downloadCsv.addEventListener("click", () => {
-  const csv = toCsv(state.rows);
-  const blob = new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "quote-items.csv";
-  a.click();
-  URL.revokeObjectURL(url);
-});
 
 els.downloadEdufine.addEventListener("click", async () => {
   const XLSX = await loadXlsx();
@@ -411,8 +393,6 @@ function previewRows(rows) {
 
 function renderResults() {
   els.resultTitle.textContent = `품목 ${state.rows.length}개`;
-  els.copyJson.disabled = state.rows.length === 0;
-  els.downloadCsv.disabled = state.rows.length === 0;
   els.downloadEdufine.disabled = state.rows.length === 0;
 
   if (state.rows.length === 0) {
@@ -454,8 +434,6 @@ function clearResults() {
   state.debug = [];
   els.resultTitle.textContent = "품목 0개";
   els.resultBody.innerHTML = `<tr class="empty-row"><td colspan="7">엑셀 파일을 업로드하면 품목이 여기에 표시됩니다.</td></tr>`;
-  els.copyJson.disabled = true;
-  els.downloadCsv.disabled = true;
   els.downloadEdufine.disabled = true;
   els.debugLog.textContent = "";
   setStatus(state.file ? `${state.file.name} 선택됨.` : "아직 선택된 엑셀 파일이 없습니다.");
@@ -507,24 +485,6 @@ function buildEdufineWorkbook(XLSX) {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, sheet, "품목내역");
   return workbook;
-}
-
-function toCsv(rows) {
-  const header = ["순번", "내용", "규격", "수량", "예상단가", "합계"];
-  const body = rows.map((row) => [
-    row.no,
-    row.name,
-    row.spec,
-    row.quantity ?? "",
-    row.unitPrice ?? "",
-    row.total ?? "",
-  ]);
-  const itemTotalAmount = rows.reduce((sum, row) => sum + (row.total || 0), 0);
-  const finalTotalAmount = itemTotalAmount + state.shippingFee;
-
-  return [header, ...body, ["", "배송비", "", "", "", state.shippingFee], ["", "최종 합계", "", "", "", finalTotalAmount]]
-    .map((line) => line.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(","))
-    .join("\n");
 }
 
 function normalizeText(value) {
