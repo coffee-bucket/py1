@@ -115,12 +115,16 @@ async function extractPdf() {
       const items = normalizeItems(textContent.items, pageNumber);
       const header = detectHeader(items);
       const pageColumns = header ? columnsFromHeader(header) : state.columns;
-      const pageRows = parseRows(items, pageColumns, header, pageNumber);
+      const gmarketRows = parseGmarketQuote(items, pageNumber);
+      const pageRows = gmarketRows.length > 0
+        ? gmarketRows
+        : parseRows(items, pageColumns, header, pageNumber);
 
       allRows.push(...pageRows);
       log(
         `${pageNumber}쪽: 텍스트 ${items.length}개, ` +
-        `${header ? "헤더 자동 인식" : "수동 컬럼 범위 사용"}, 품목 ${pageRows.length}개`
+        `${gmarketRows.length > 0 ? "G마켓 규칙 적용" : header ? "헤더 자동 인식" : "수동 컬럼 범위 사용"}, ` +
+        `품목 ${pageRows.length}개`
       );
     }
 
@@ -203,6 +207,257 @@ function columnsFromHeader(header) {
     quantity: { ...fallback.quantity, min: specQty, max: qtyPrice },
     unitPrice: { ...fallback.unitPrice, min: qtyPrice, max: xs.unitPrice + 180 },
   };
+}
+
+function parseGmarketQuote(items, pageNumber) {
+  const fullText = items.map((item) => item.text).join(" ");
+  const looksLikeGmarket = /상품명|필수선택|추가구성/.test(fullText) &&
+    /공급\s*가액|공급가액/.test(fullText);
+
+  if (!looksLikeGmarket) {
+    return [];
+  }
+
+  const lines = groupByLine(items, 4);
+  const columnRows = parseGmarketColumnRows(lines, pageNumber);
+  if (columnRows.length > 0) {
+    log("G마켓 규칙: 표 헤더를 기준으로 상품명/필수선택/추가구성, 수량, 공급가액을 읽었습니다.");
+    return columnRows;
+  }
+
+  const blocks = [];
+  let current = createGmarketBlock();
+
+  lines.forEach((line) => {
+    const text = line.items.map((item) => item.text).join(" ");
+
+    if (/상품명/.test(text) && hasGmarketBlockContent(current)) {
+      blocks.push(current);
+      current = createGmarketBlock();
+    }
+
+    const name = valueAfterLabel(line.items, ["상품명"]);
+    const requiredOption = valueAfterLabel(line.items, ["필수선택", "필수 선택"]);
+    const addOn = valueAfterLabel(line.items, ["추가구성", "추가 구성"]);
+    const quantity = valueAfterLabel(line.items, ["수량"]);
+    const supplyAmount = valueAfterLabel(line.items, ["공급가액", "공급 가액"]);
+
+    pushGmarketContent(current, name);
+    pushGmarketContent(current, requiredOption);
+    pushGmarketContent(current, addOn);
+
+    const quantityNumber = toNumber(quantity);
+    if (quantityNumber) current.quantity = quantityNumber;
+
+    const supplyAmountNumber = toNumber(supplyAmount);
+    if (supplyAmountNumber) current.supplyAmount = supplyAmountNumber;
+  });
+
+  if (hasGmarketBlockContent(current)) {
+    blocks.push(current);
+  }
+
+  const rows = blocks
+    .map((block) => {
+      const unitPrice = block.quantity && block.supplyAmount
+        ? Math.round(block.supplyAmount / block.quantity)
+        : null;
+
+      return {
+        name: cleanGmarketName(block.contents.join(" / ")),
+        spec: "개",
+        quantity: block.quantity,
+        unitPrice,
+        page: pageNumber,
+      };
+    })
+    .filter((row) => row.name && row.quantity && row.unitPrice);
+
+  if (rows.length > 0) {
+    log("G마켓 규칙: 예상단가는 할인금액을 제외하고 공급가액 ÷ 수량으로 계산했습니다.");
+  } else {
+    const preview = lines.slice(0, 16).map((line) => lineText(line.items)).filter(Boolean);
+    log(`G마켓 문서는 감지했지만 품목을 못 찾았습니다. 읽힌 행 미리보기:\n${preview.join("\n")}`);
+  }
+
+  return rows;
+}
+
+function parseGmarketColumnRows(lines, pageNumber) {
+  const header = detectGmarketColumnHeader(lines);
+  if (!header) return [];
+
+  return lines
+    .filter((line) => line.y < header.y - 3)
+    .map((line) => rowFromGmarketColumns(line.items, header.columns, pageNumber))
+    .filter((row) => row.name && row.quantity && row.unitPrice);
+}
+
+function detectGmarketColumnHeader(lines) {
+  for (const line of lines) {
+    const text = line.items.map((item) => item.text).join(" ");
+    if (!/상품명/.test(text) || !/수량/.test(text) || !/공급\s*가액|공급가액/.test(text)) {
+      continue;
+    }
+
+    const point = (labels) => {
+      const item = line.items.find((candidate) => {
+        return labels.some((label) => compactText(candidate.text).includes(compactText(label)));
+      });
+      return item ? item.x : null;
+    };
+
+    const points = {
+      name: point(["상품명"]),
+      requiredOption: point(["필수선택", "필수 선택"]),
+      addOn: point(["추가구성", "추가 구성"]),
+      quantity: point(["수량"]),
+      supplyAmount: point(["공급가액", "공급 가액"]),
+      discount: point(["할인금액", "할인 금액"]),
+    };
+
+    if (points.name === null || points.quantity === null || points.supplyAmount === null) {
+      continue;
+    }
+
+    return {
+      y: line.y,
+      columns: columnsFromGmarketPoints(points),
+    };
+  }
+
+  return null;
+}
+
+function columnsFromGmarketPoints(points) {
+  const ordered = Object.entries(points)
+    .filter(([, x]) => x !== null)
+    .sort((a, b) => a[1] - b[1]);
+
+  const boundaryAfter = (key, fallbackWidth) => {
+    const index = ordered.findIndex(([candidate]) => candidate === key);
+    if (index < 0) return null;
+    const currentX = ordered[index][1];
+    const nextX = ordered[index + 1]?.[1];
+    return nextX ? midpoint(currentX, nextX) : currentX + fallbackWidth;
+  };
+
+  const boundaryBefore = (key, fallbackWidth) => {
+    const index = ordered.findIndex(([candidate]) => candidate === key);
+    if (index < 0) return null;
+    const currentX = ordered[index][1];
+    const previousX = ordered[index - 1]?.[1];
+    return previousX ? midpoint(previousX, currentX) : Math.max(0, currentX - fallbackWidth);
+  };
+
+  const columns = {};
+  ["name", "requiredOption", "addOn", "quantity", "supplyAmount"].forEach((key) => {
+    const x = points[key];
+    if (x === null) return;
+    columns[key] = {
+      min: boundaryBefore(key, key === "name" ? 30 : 45),
+      max: boundaryAfter(key, key === "supplyAmount" ? 120 : 90),
+    };
+  });
+
+  return columns;
+}
+
+function rowFromGmarketColumns(items, columns, pageNumber) {
+  const cell = (key) => {
+    const column = columns[key];
+    if (!column) return "";
+    return items
+      .filter((item) => item.x >= column.min && item.x < column.max)
+      .sort((a, b) => a.x - b.x)
+      .map((item) => item.text)
+      .join(" ")
+      .trim();
+  };
+
+  const contents = [
+    cell("name"),
+    cell("requiredOption"),
+    cell("addOn"),
+  ].map(cleanGmarketName).filter(Boolean);
+
+  const quantity = toNumber(cell("quantity"));
+  const supplyAmount = toNumber(cell("supplyAmount"));
+  const unitPrice = quantity && supplyAmount ? Math.round(supplyAmount / quantity) : null;
+
+  return {
+    name: contents.join(" / "),
+    spec: "개",
+    quantity,
+    unitPrice,
+    page: pageNumber,
+  };
+}
+
+function createGmarketBlock() {
+  return {
+    contents: [],
+    quantity: null,
+    supplyAmount: null,
+  };
+}
+
+function hasGmarketBlockContent(block) {
+  return block.contents.length > 0 || block.quantity || block.supplyAmount;
+}
+
+function pushGmarketContent(block, value) {
+  const cleaned = cleanGmarketName(value);
+  if (cleaned && !block.contents.includes(cleaned)) {
+    block.contents.push(cleaned);
+  }
+}
+
+function cleanGmarketName(text) {
+  return cleanCell(text)
+    .replace(/^(선택|없음|해당없음|무료|기본)\s*$/g, "")
+    .replace(/\s*\/\s*$/g, "");
+}
+
+function valueAfterLabel(items, labels) {
+  const sorted = [...items].sort((a, b) => a.x - b.x);
+  const nextLabelPattern = /상품명|필수\s*선택|필수선택|추가\s*구성|추가구성|수량|공급\s*가액|공급가액|할인\s*금액|할인금액|판매가|합계/;
+
+  for (let index = 0; index < sorted.length; index += 1) {
+    const item = sorted[index];
+    const label = labels.find((candidate) => compactText(item.text).includes(compactText(candidate)));
+    if (!label) continue;
+
+    const inlineValue = textAfterLabel(item.text, label);
+    const rightValues = [];
+
+    for (const candidate of sorted.slice(index + 1)) {
+      if (nextLabelPattern.test(candidate.text)) break;
+      rightValues.push(candidate.text);
+    }
+
+    return cleanCell([inlineValue, ...rightValues].filter(Boolean).join(" "));
+  }
+
+  return "";
+}
+
+function textAfterLabel(text, label) {
+  const normalized = normalizeText(text);
+  const compactLabel = compactText(label);
+  const compact = compactText(normalized);
+  const compactIndex = compact.indexOf(compactLabel);
+
+  if (compactIndex < 0) return "";
+  if (compact === compactLabel) return "";
+
+  const labelIndex = normalized.indexOf(label);
+  if (labelIndex < 0) return "";
+
+  return normalized
+    .slice(labelIndex + label.length)
+    .replace(/^[:：|\-\s]+/, "")
+    .trim();
 }
 
 function parseRows(items, columns, header, pageNumber) {
@@ -453,6 +708,10 @@ function toCsv(rows) {
 
 function normalizeText(text) {
   return String(text).replace(/\s+/g, " ").trim();
+}
+
+function compactText(text) {
+  return normalizeText(text).replace(/\s+/g, "");
 }
 
 function cleanCell(text) {
