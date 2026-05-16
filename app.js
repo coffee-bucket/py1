@@ -25,6 +25,17 @@ els.file.addEventListener("change", () => {
   setFile(file);
 });
 
+els.dropzone.addEventListener("click", () => {
+  els.file.click();
+});
+
+els.dropzone.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    els.file.click();
+  }
+});
+
 ["dragenter", "dragover"].forEach((eventName) => {
   els.dropzone.addEventListener(eventName, (event) => {
     event.preventDefault();
@@ -41,6 +52,7 @@ els.file.addEventListener("change", () => {
 
 els.dropzone.addEventListener("drop", (event) => {
   const [file] = event.dataTransfer.files;
+  els.file.value = "";
   setFile(file);
 });
 
@@ -161,6 +173,12 @@ function parseGmarketByKeywords(lines, pageNumber) {
     return [];
   }
 
+  const tableRows = parseKeywordTable(lines, pageNumber);
+  if (tableRows.length > 0) {
+    log("키워드 규칙: 표 헤더를 찾고, 값 줄에서 공급가액과 수량을 매칭했습니다.");
+    return tableRows;
+  }
+
   const blocks = [];
   let current = createBlock();
   let pendingLabel = null;
@@ -198,6 +216,86 @@ function parseGmarketByKeywords(lines, pageNumber) {
   }
 
   return rows;
+}
+
+function parseKeywordTable(lines, pageNumber) {
+  const headerIndex = lines.findIndex((line) => {
+    return hasKeyword(line, "상품명") &&
+      hasKeyword(line, "수량") &&
+      hasKeyword(line, "공급가액");
+  });
+
+  if (headerIndex < 0) return [];
+
+  const headerLine = lines[headerIndex];
+  const hasDiscount = hasKeyword(headerLine, "할인금액");
+  const rows = [];
+
+  for (const line of lines.slice(headerIndex + 1)) {
+    if (isSkippableLine(line) || hasKeyword(line, "상품명")) continue;
+
+    const row = parseValueOnlyLine(line, pageNumber, hasDiscount);
+    if (row.name && row.quantity && row.unitPrice) {
+      rows.push(row);
+    }
+  }
+
+  return rows;
+}
+
+function parseValueOnlyLine(line, pageNumber, hasDiscount) {
+  const moneyMatches = [...line.matchAll(/-?\d[\d,]*\s*원?/g)]
+    .map((match) => ({
+      text: match[0],
+      index: match.index,
+      value: toNumber(match[0]),
+    }))
+    .filter((match) => {
+      return Number.isFinite(match.value) &&
+        (match.value >= 100 || match.text.includes(","));
+    });
+
+  if (moneyMatches.length === 0) return emptyRow(pageNumber);
+
+  const supplyMatch = chooseSupplyAmount(moneyMatches, hasDiscount);
+
+  const beforeSupply = line.slice(0, supplyMatch.index).trim();
+  const beforeTokens = beforeSupply.split(/\s+/).filter(Boolean);
+  const quantityTokenIndex = findLastIndex(beforeTokens, (token) => {
+    const value = toNumber(token);
+    return Number.isInteger(value) && value > 0 && value < 100000;
+  });
+
+  if (quantityTokenIndex < 0) return emptyRow(pageNumber);
+
+  const quantity = toNumber(beforeTokens[quantityTokenIndex]);
+  const name = beforeTokens
+    .slice(0, quantityTokenIndex)
+    .filter((token) => !isUnitLike(token))
+    .join(" ");
+
+  return {
+    name: cleanGmarketName(name),
+    spec: "개",
+    quantity,
+    unitPrice: Math.round(supplyMatch.value / quantity),
+    page: pageNumber,
+  };
+}
+
+function chooseSupplyAmount(moneyMatches, hasDiscount) {
+  if (moneyMatches.length === 1) return moneyMatches[0];
+
+  const positiveMatches = moneyMatches.filter((match) => match.value > 0);
+  if (positiveMatches.length === 0) return moneyMatches[moneyMatches.length - 1];
+
+  if (hasDiscount && positiveMatches.length >= 3) {
+    return positiveMatches[positiveMatches.length - 2];
+  }
+
+  return positiveMatches.reduce((best, match) => {
+    return match.value > best.value ? match : best;
+  }, positiveMatches[0]);
 }
 
 function extractKeywordValues(line) {
@@ -269,7 +367,7 @@ function findTrailingLabel(line) {
 }
 
 function labelRegex() {
-  return /(상품명|필수\s*선택|필수선택|추가\s*구성|추가구성|수량|공급\s*가액|공급가액|할인\s*금액|할인금액)/g;
+  return /(상\s*품\s*명|필\s*수\s*선\s*택|추\s*가\s*구\s*성|수\s*량|공\s*급\s*가\s*액|할\s*인\s*금\s*액)/g;
 }
 
 function canonicalLabel(label) {
@@ -287,7 +385,22 @@ function hasKeyword(text, keyword) {
 }
 
 function isSkippableLine(line) {
-  return /할인\s*금액|할인금액|합계|총\s*금액|총금액|판매가|배송비/.test(line);
+  return hasKeyword(line, "할인금액") ||
+    /합계|총\s*금액|총금액|판매가|배송비|결제금액|주문금액/.test(line);
+}
+
+function isUnitLike(text) {
+  return /^(개|EA|ea|pcs?|PCS?)$/.test(normalizeText(text));
+}
+
+function emptyRow(pageNumber) {
+  return {
+    name: "",
+    spec: "개",
+    quantity: null,
+    unitPrice: null,
+    page: pageNumber,
+  };
 }
 
 function pushUnique(values, value) {
@@ -372,6 +485,13 @@ function toNumber(text) {
   if (!normalized) return null;
   const value = Number(normalized);
   return Number.isFinite(value) ? value : null;
+}
+
+function findLastIndex(items, predicate) {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (predicate(items[index])) return index;
+  }
+  return -1;
 }
 
 function formatNumber(value) {
