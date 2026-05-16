@@ -34,16 +34,14 @@
       </div>
 
       <aside class="settings">
-        <div class="section-head">
-          <h2>컬럼 보정</h2>
-          <button id="resetColumns" type="button" class="ghost">초기화</button>
-        </div>
-        <p>자동 인식이 빗나가면 x 좌표 범위를 조금씩 조정하세요.</p>
-        <div class="column-grid" id="columnInputs"></div>
-        <label class="field">
-          <span>행 묶기 간격</span>
-          <input id="rowTolerance" type="number" min="1" max="12" value="4">
-        </label>
+        <h2>키워드 매칭 규칙</h2>
+        <ul class="rules">
+          <li>상품명 / 필수선택 / 추가구성 → 내용</li>
+          <li>규격 → 개</li>
+          <li>수량 → 수량</li>
+          <li>예상단가 → 공급가액 ÷ 수량</li>
+          <li>할인금액은 계산에서 제외</li>
+        </ul>
       </aside>
     </section>
 
