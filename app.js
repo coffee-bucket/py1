@@ -475,41 +475,32 @@ function toEdufineRow(row) {
 
 function buildEdufineWorkbook(XLSX) {
   const rows = [
-    ["순번", "내용", "규격", "수량", "단위", "예상단가", "예상금액"],
-    ...state.rows.map((row, index) => [
-      `${index + 1}-1`,
+    ["내용", "규격", "단위", "수량", "예상단가"],
+    ...state.rows.map((row) => [
       row.name,
       row.spec,
-      row.quantity ?? "",
       "",
+      row.quantity ?? "",
       row.unitPrice ?? "",
-      row.total ?? "",
     ]),
   ];
 
   if (state.shippingFee > 0) {
     rows.push([
-      `${state.rows.length + 1}-1`,
       "배송비",
       "",
-      1,
       "",
-      state.shippingFee,
+      1,
       state.shippingFee,
     ]);
   }
 
-  const finalTotal = state.rows.reduce((sum, row) => sum + (row.total || 0), 0) + state.shippingFee;
-  rows.push(["합계", "", "", "", "", "", finalTotal]);
-
   const sheet = XLSX.utils.aoa_to_sheet(rows);
   sheet["!cols"] = [
-    { wch: 10 },
     { wch: 42 },
     { wch: 10 },
     { wch: 8 },
     { wch: 8 },
-    { wch: 14 },
     { wch: 14 },
   ];
 
