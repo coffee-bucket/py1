@@ -253,21 +253,6 @@ button.ghost {
   line-height: 1.45;
 }
 
-.upload-button-example {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 8px;
-  padding: 2px 14px;
-  border: 1px solid #9f9f9f;
-  background: linear-gradient(#ffffff, #eeeeee);
-  color: #004b85;
-  font-size: 13px;
-  font-weight: 800;
-  line-height: 1.2;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
-}
-
 .results {
   padding: 18px;
 }
