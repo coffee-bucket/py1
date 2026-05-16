@@ -17,6 +17,7 @@ const els = {
   resultBody: document.querySelector("#resultBody"),
   copyJson: document.querySelector("#copyJson"),
   downloadCsv: document.querySelector("#downloadCsv"),
+  downloadEdufine: document.querySelector("#downloadEdufine"),
   debugLog: document.querySelector("#debugLog"),
 };
 
@@ -73,6 +74,13 @@ els.downloadCsv.addEventListener("click", () => {
   a.download = "quote-items.csv";
   a.click();
   URL.revokeObjectURL(url);
+});
+
+els.downloadEdufine.addEventListener("click", async () => {
+  const XLSX = await loadXlsx();
+  const workbook = buildEdufineWorkbook(XLSX);
+  XLSX.writeFile(workbook, "품목내역(통합)_입력완료.xls", { bookType: "xls" });
+  setStatus("품목내역 엑셀 파일을 저장했습니다.");
 });
 
 els.resultBody.addEventListener("click", async (event) => {
@@ -405,6 +413,7 @@ function renderResults() {
   els.resultTitle.textContent = `품목 ${state.rows.length}개`;
   els.copyJson.disabled = state.rows.length === 0;
   els.downloadCsv.disabled = state.rows.length === 0;
+  els.downloadEdufine.disabled = state.rows.length === 0;
 
   if (state.rows.length === 0) {
     els.resultBody.innerHTML = `<tr class="empty-row"><td colspan="7">추출된 품목이 없습니다. 추출 로그에서 엑셀 내용을 확인해 주세요.</td></tr>`;
@@ -447,6 +456,7 @@ function clearResults() {
   els.resultBody.innerHTML = `<tr class="empty-row"><td colspan="7">엑셀 파일을 업로드하면 품목이 여기에 표시됩니다.</td></tr>`;
   els.copyJson.disabled = true;
   els.downloadCsv.disabled = true;
+  els.downloadEdufine.disabled = true;
   els.debugLog.textContent = "";
   setStatus(state.file ? `${state.file.name} 선택됨.` : "아직 선택된 엑셀 파일이 없습니다.");
 }
@@ -461,6 +471,51 @@ function toEdufineRow(row) {
     row.unitPrice ?? "",
     row.total ?? "",
   ].join("\t");
+}
+
+function buildEdufineWorkbook(XLSX) {
+  const rows = [
+    ["순번", "내용", "규격", "수량", "단위", "예상단가", "예상금액"],
+    ...state.rows.map((row, index) => [
+      `${index + 1}-1`,
+      row.name,
+      row.spec,
+      row.quantity ?? "",
+      "",
+      row.unitPrice ?? "",
+      row.total ?? "",
+    ]),
+  ];
+
+  if (state.shippingFee > 0) {
+    rows.push([
+      `${state.rows.length + 1}-1`,
+      "배송비",
+      "",
+      1,
+      "",
+      state.shippingFee,
+      state.shippingFee,
+    ]);
+  }
+
+  const finalTotal = state.rows.reduce((sum, row) => sum + (row.total || 0), 0) + state.shippingFee;
+  rows.push(["합계", "", "", "", "", "", finalTotal]);
+
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  sheet["!cols"] = [
+    { wch: 10 },
+    { wch: 42 },
+    { wch: 10 },
+    { wch: 8 },
+    { wch: 8 },
+    { wch: 14 },
+    { wch: 14 },
+  ];
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "품목내역");
+  return workbook;
 }
 
 function toCsv(rows) {
