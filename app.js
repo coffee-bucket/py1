@@ -3,6 +3,7 @@ const XLSX_URL = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js
 const state = {
   file: null,
   rows: [],
+  shippingFee: 0,
   debug: [],
 };
 
@@ -97,6 +98,7 @@ async function extractWorkbook() {
     const data = await state.file.arrayBuffer();
     const workbook = XLSX.read(data, { type: "array", cellDates: false });
     const allRows = [];
+    let shippingFee = 0;
 
     log(`시트 ${workbook.SheetNames.length}개를 확인합니다.`);
 
@@ -109,9 +111,11 @@ async function extractWorkbook() {
         blankrows: false,
       });
       const sheetRows = parseSheetRows(rows, sheetName);
+      const sheetShippingFee = findShippingFee(rows);
 
       allRows.push(...sheetRows);
-      log(`${sheetName}: 행 ${rows.length}개, 키워드 매칭 품목 ${sheetRows.length}개`);
+      shippingFee += sheetShippingFee;
+      log(`${sheetName}: 행 ${rows.length}개, 키워드 매칭 품목 ${sheetRows.length}개, 배송비 ${formatNumber(sheetShippingFee)}원`);
 
       if (sheetRows.length === 0) {
         log(`읽힌 행 미리보기:\n${previewRows(rows)}`);
@@ -119,6 +123,7 @@ async function extractWorkbook() {
     });
 
     state.rows = allRows.map((row, index) => ({ no: index + 1, ...row }));
+    state.shippingFee = shippingFee;
     renderResults();
     setStatus(`완료했습니다. 품목 ${state.rows.length}개를 추출했습니다.`);
   } catch (error) {
@@ -126,6 +131,21 @@ async function extractWorkbook() {
     setStatus(`추출하지 못했습니다: ${error.message}`, true);
     log(error.stack || error.message);
   }
+}
+
+function findShippingFee(rows) {
+  return rows.reduce((sum, row) => {
+    const hasShippingLabel = row.some((value) => compactText(value).includes("배송비"));
+    if (!hasShippingLabel) return sum;
+
+    const numbers = row
+      .map(toNumber)
+      .filter((value) => Number.isFinite(value));
+
+    if (numbers.length === 0) return sum;
+
+    return sum + numbers[numbers.length - 1];
+  }, 0);
 }
 
 async function loadXlsx() {
@@ -198,6 +218,7 @@ function rowFromTable(row, columns, sheetName) {
     spec: "개",
     quantity,
     unitPrice,
+    total: quantity && unitPrice ? quantity * unitPrice : null,
     source: sheetName,
   };
 }
@@ -272,6 +293,7 @@ function blockToRow(block, sheetName) {
     spec: "개",
     quantity: block.quantity,
     unitPrice,
+    total: block.quantity && unitPrice ? block.quantity * unitPrice : null,
     source: sheetName,
   };
 }
@@ -373,20 +395,34 @@ function renderResults() {
     return;
   }
 
-  els.resultBody.innerHTML = state.rows.map((row) => `
+  const itemTotalAmount = state.rows.reduce((sum, row) => sum + (row.total || 0), 0);
+  const finalTotalAmount = itemTotalAmount + state.shippingFee;
+  const bodyRows = state.rows.map((row) => `
     <tr>
       <td>${row.no}</td>
       <td>${escapeHtml(row.name)}</td>
       <td>${escapeHtml(row.spec)}</td>
       <td>${row.quantity ?? ""}</td>
       <td>${formatNumber(row.unitPrice)}</td>
-      <td>${escapeHtml(row.source)}</td>
+      <td>${formatNumber(row.total)}</td>
     </tr>
   `).join("");
+
+  els.resultBody.innerHTML = `${bodyRows}
+    <tr class="summary-row">
+      <td colspan="5">배송비</td>
+      <td>${formatNumber(state.shippingFee)}</td>
+    </tr>
+    <tr class="total-row">
+      <td colspan="5">최종 합계</td>
+      <td>${formatNumber(finalTotalAmount)}</td>
+    </tr>
+  `;
 }
 
 function clearResults() {
   state.rows = [];
+  state.shippingFee = 0;
   state.debug = [];
   els.resultTitle.textContent = "품목 0개";
   els.resultBody.innerHTML = `<tr class="empty-row"><td colspan="6">엑셀 파일을 업로드하면 품목이 여기에 표시됩니다.</td></tr>`;
@@ -397,17 +433,19 @@ function clearResults() {
 }
 
 function toCsv(rows) {
-  const header = ["순번", "내용", "규격", "수량", "예상단가", "시트"];
+  const header = ["순번", "내용", "규격", "수량", "예상단가", "합계"];
   const body = rows.map((row) => [
     row.no,
     row.name,
     row.spec,
     row.quantity ?? "",
     row.unitPrice ?? "",
-    row.source,
+    row.total ?? "",
   ]);
+  const itemTotalAmount = rows.reduce((sum, row) => sum + (row.total || 0), 0);
+  const finalTotalAmount = itemTotalAmount + state.shippingFee;
 
-  return [header, ...body]
+  return [header, ...body, ["", "배송비", "", "", "", state.shippingFee], ["", "최종 합계", "", "", "", finalTotalAmount]]
     .map((line) => line.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(","))
     .join("\n");
 }

@@ -247,7 +247,8 @@ button.ghost {
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 760px;
+  table-layout: fixed;
+  min-width: 940px;
 }
 
 th,
@@ -262,6 +263,38 @@ th {
   background: #f1f5f3;
   font-size: 13px;
   color: #3c474b;
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+th:nth-child(1),
+td:nth-child(1) {
+  width: 72px;
+}
+
+th:nth-child(2),
+td:nth-child(2) {
+  width: auto;
+}
+
+th:nth-child(3),
+td:nth-child(3) {
+  width: 90px;
+}
+
+th:nth-child(4),
+td:nth-child(4) {
+  width: 90px;
+}
+
+th:nth-child(5),
+td:nth-child(5) {
+  width: 130px;
+}
+
+th:nth-child(6),
+td:nth-child(6) {
+  width: 140px;
 }
 
 td:nth-child(1),
@@ -274,6 +307,24 @@ td:nth-child(6) {
 
 tbody tr:last-child td {
   border-bottom: 0;
+}
+
+.summary-row td {
+  background: #fbfcfb;
+  font-weight: 800;
+}
+
+.summary-row td:first-child {
+  text-align: right;
+}
+
+.total-row td {
+  background: #f7faf8;
+  font-weight: 900;
+}
+
+.total-row td:first-child {
+  text-align: right;
 }
 
 .empty-row td {
