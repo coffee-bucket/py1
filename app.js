@@ -75,6 +75,22 @@ els.downloadCsv.addEventListener("click", () => {
   URL.revokeObjectURL(url);
 });
 
+els.resultBody.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-copy-row]");
+  if (!button) return;
+
+  const row = state.rows.find((item) => String(item.no) === button.dataset.copyRow);
+  if (!row) return;
+
+  await navigator.clipboard.writeText(toEdufineRow(row));
+  button.textContent = "복사됨";
+  setStatus(`${row.no}번 품목을 품의용 형식으로 복사했습니다.`);
+
+  window.setTimeout(() => {
+    button.textContent = "품의용 복사";
+  }, 1200);
+});
+
 function setFile(file) {
   if (!file) return;
   if (!/\.(xls|xlsx)$/i.test(file.name)) {
@@ -391,7 +407,7 @@ function renderResults() {
   els.downloadCsv.disabled = state.rows.length === 0;
 
   if (state.rows.length === 0) {
-    els.resultBody.innerHTML = `<tr class="empty-row"><td colspan="6">추출된 품목이 없습니다. 추출 로그에서 엑셀 내용을 확인해 주세요.</td></tr>`;
+    els.resultBody.innerHTML = `<tr class="empty-row"><td colspan="7">추출된 품목이 없습니다. 추출 로그에서 엑셀 내용을 확인해 주세요.</td></tr>`;
     return;
   }
 
@@ -405,6 +421,7 @@ function renderResults() {
       <td>${row.quantity ?? ""}</td>
       <td>${formatNumber(row.unitPrice)}</td>
       <td>${formatNumber(row.total)}</td>
+      <td><button type="button" class="copy-row-btn" data-copy-row="${row.no}">품의용 복사</button></td>
     </tr>
   `).join("");
 
@@ -412,10 +429,12 @@ function renderResults() {
     <tr class="summary-row">
       <td colspan="5">배송비</td>
       <td>${formatNumber(state.shippingFee)}</td>
+      <td></td>
     </tr>
     <tr class="total-row">
       <td colspan="5">최종 합계</td>
       <td>${formatNumber(finalTotalAmount)}</td>
+      <td></td>
     </tr>
   `;
 }
@@ -425,11 +444,23 @@ function clearResults() {
   state.shippingFee = 0;
   state.debug = [];
   els.resultTitle.textContent = "품목 0개";
-  els.resultBody.innerHTML = `<tr class="empty-row"><td colspan="6">엑셀 파일을 업로드하면 품목이 여기에 표시됩니다.</td></tr>`;
+  els.resultBody.innerHTML = `<tr class="empty-row"><td colspan="7">엑셀 파일을 업로드하면 품목이 여기에 표시됩니다.</td></tr>`;
   els.copyJson.disabled = true;
   els.downloadCsv.disabled = true;
   els.debugLog.textContent = "";
   setStatus(state.file ? `${state.file.name} 선택됨.` : "아직 선택된 엑셀 파일이 없습니다.");
+}
+
+function toEdufineRow(row) {
+  return [
+    row.no,
+    row.name,
+    row.spec,
+    row.quantity ?? "",
+    "",
+    row.unitPrice ?? "",
+    row.total ?? "",
+  ].join("\t");
 }
 
 function toCsv(rows) {

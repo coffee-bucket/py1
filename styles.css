@@ -248,7 +248,7 @@ table {
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
-  min-width: 940px;
+  min-width: 1080px;
 }
 
 th,
@@ -297,12 +297,35 @@ td:nth-child(6) {
   width: 140px;
 }
 
+th:nth-child(7),
+td:nth-child(7) {
+  width: 130px;
+}
+
 td:nth-child(1),
 td:nth-child(4),
 td:nth-child(5),
 td:nth-child(6) {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+td:nth-child(7) {
+  text-align: center;
+}
+
+.copy-row-btn {
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 6px;
+  background: var(--blue-soft);
+  color: #1f4f85;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.copy-row-btn:hover {
+  background: #d8e6f4;
 }
 
 tbody tr:last-child td {
