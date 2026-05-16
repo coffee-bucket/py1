@@ -208,14 +208,24 @@ function columnsFromHeader(header) {
 function parseRows(items, columns, header, pageNumber) {
   const tolerance = Number(els.rowTolerance.value) || 4;
   const candidateItems = items.filter((item) => {
-    const inTableArea = !header || item.y < header.y - tolerance;
-    const inAnyColumn = Object.values(columns).some((column) => item.x >= column.min && item.x < column.max);
-    return inTableArea && inAnyColumn;
+    return !header || item.y < header.y - tolerance;
   });
 
-  return groupByLine(candidateItems, tolerance)
-    .map((line) => rowFromLine(line.items, columns, pageNumber))
+  const lines = groupByLine(candidateItems, tolerance);
+  const rows = lines
+    .map((line) => {
+      const coordinateRow = rowFromLine(line.items, columns, pageNumber);
+      if (isUsefulRow(coordinateRow)) return coordinateRow;
+      return rowFromTokens(line.items, pageNumber);
+    })
     .filter(isUsefulRow);
+
+  if (rows.length === 0) {
+    const preview = lines.slice(0, 12).map((line) => lineText(line.items)).filter(Boolean);
+    log(`품목을 못 찾았습니다. 읽힌 행 미리보기:\n${preview.join("\n")}`);
+  }
+
+  return rows;
 }
 
 function rowFromLine(items, columns, pageNumber) {
@@ -235,10 +245,125 @@ function rowFromLine(items, columns, pageNumber) {
   };
 }
 
+function rowFromTokens(items, pageNumber) {
+  const tokens = items
+    .sort((a, b) => a.x - b.x)
+    .map((item) => item.text)
+    .filter((text) => !isIgnoredToken(text));
+
+  if (tokens.length < 3) {
+    return emptyRow(pageNumber);
+  }
+
+  const joined = tokens.join(" ");
+  if (isHeaderLike(joined)) {
+    return emptyRow(pageNumber);
+  }
+
+  const priceIndex = findLastIndex(tokens, isPriceLike);
+  if (priceIndex < 0) {
+    return emptyRow(pageNumber);
+  }
+
+  const quantityIndex = findPreviousIndex(tokens, priceIndex - 1, isQuantityLike);
+  if (quantityIndex < 0) {
+    return emptyRow(pageNumber);
+  }
+
+  const specIndex = findPreviousIndex(tokens, quantityIndex - 1, isSpecLike);
+  if (specIndex < 0) {
+    return emptyRow(pageNumber);
+  }
+
+  const nameTokens = tokens
+    .slice(0, specIndex)
+    .filter((token) => !isRowNumberLike(token));
+
+  return {
+    name: cleanCell(nameTokens.join(" ")),
+    spec: cleanCell(tokens[specIndex]),
+    quantity: toNumber(tokens[quantityIndex]),
+    unitPrice: toNumber(tokens[priceIndex]),
+    page: pageNumber,
+  };
+}
+
 function isUsefulRow(row) {
   if (!row.name || row.name.includes("내용")) return false;
   if (row.name.includes("합계") || row.name.includes("소계")) return false;
   return Boolean(row.spec || row.quantity || row.unitPrice);
+}
+
+function emptyRow(pageNumber) {
+  return {
+    name: "",
+    spec: "",
+    quantity: null,
+    unitPrice: null,
+    page: pageNumber,
+  };
+}
+
+function lineText(items) {
+  return items
+    .sort((a, b) => a.x - b.x)
+    .map((item) => `[${Math.round(item.x)},${Math.round(item.y)}]${item.text}`)
+    .join(" ");
+}
+
+function isHeaderLike(text) {
+  return text.includes("내용") ||
+    text.includes("규격") ||
+    text.includes("수량") ||
+    text.includes("예상단가") ||
+    text.includes("단가");
+}
+
+function isIgnoredToken(text) {
+  const normalized = normalizeText(text);
+  return normalized === "" ||
+    normalized === "N" ||
+    normalized === "Y" ||
+    normalized === "상태" ||
+    normalized === "순번" ||
+    normalized === "선택" ||
+    normalized === "□" ||
+    normalized === "☐";
+}
+
+function isRowNumberLike(text) {
+  return /^\d{1,3}$/.test(normalizeText(text));
+}
+
+function isQuantityLike(text) {
+  const value = toNumber(text);
+  return Number.isInteger(value) && value > 0 && value < 100000;
+}
+
+function isPriceLike(text) {
+  const normalized = normalizeText(text);
+  const value = toNumber(normalized);
+  return Number.isFinite(value) && value >= 10 && (normalized.includes(",") || value >= 100);
+}
+
+function isSpecLike(text) {
+  const normalized = normalizeText(text).toLowerCase();
+  return /\d/.test(normalized) &&
+    (/[*x×]/.test(normalized) || /[a-z가-힣]/.test(normalized) || /\d{2,}/.test(normalized));
+}
+
+function findLastIndex(items, predicate) {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (predicate(items[index])) return index;
+  }
+  return -1;
+}
+
+function findPreviousIndex(items, startIndex, predicate) {
+  for (let index = startIndex; index >= 0; index -= 1) {
+    if (predicate(items[index])) return index;
+  }
+  return -1;
 }
 
 function groupByLine(items, tolerance) {
