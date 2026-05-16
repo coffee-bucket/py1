@@ -1,5 +1,4 @@
-const PDFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
-const PDFJS_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
+const XLSX_URL = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
 
 const state = {
   file: null,
@@ -8,7 +7,7 @@ const state = {
 };
 
 const els = {
-  file: document.querySelector("#pdfFile"),
+  file: document.querySelector("#quoteFile"),
   dropzone: document.querySelector("#dropzone"),
   extract: document.querySelector("#extractBtn"),
   clear: document.querySelector("#sampleBtn"),
@@ -56,7 +55,7 @@ els.dropzone.addEventListener("drop", (event) => {
   setFile(file);
 });
 
-els.extract.addEventListener("click", extractPdf);
+els.extract.addEventListener("click", extractWorkbook);
 els.clear.addEventListener("click", clearResults);
 
 els.copyJson.addEventListener("click", async () => {
@@ -77,8 +76,8 @@ els.downloadCsv.addEventListener("click", () => {
 
 function setFile(file) {
   if (!file) return;
-  if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-    setStatus("PDF 파일만 업로드할 수 있습니다.", true);
+  if (!/\.(xls|xlsx)$/i.test(file.name)) {
+    setStatus("엑셀 파일(.xls, .xlsx)만 업로드할 수 있습니다.", true);
     return;
   }
 
@@ -87,35 +86,37 @@ function setFile(file) {
   setStatus(`${file.name} 선택됨. 추출하기를 누르세요.`);
 }
 
-async function extractPdf() {
+async function extractWorkbook() {
   if (!state.file) return;
 
   clearResults();
-  setStatus("PDF 텍스트를 읽는 중입니다...");
+  setStatus("엑셀 파일을 읽는 중입니다...");
 
   try {
-    const pdfjsLib = await loadPdfJs();
-    pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
-
+    const XLSX = await loadXlsx();
     const data = await state.file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data }).promise;
+    const workbook = XLSX.read(data, { type: "array", cellDates: false });
     const allRows = [];
 
-    log(`페이지 ${pdf.numPages}개를 확인합니다.`);
+    log(`시트 ${workbook.SheetNames.length}개를 확인합니다.`);
 
-    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-      const page = await pdf.getPage(pageNumber);
-      const textContent = await page.getTextContent();
-      const lines = getPageLines(textContent.items);
-      const pageRows = parseGmarketByKeywords(lines, pageNumber);
+    workbook.SheetNames.forEach((sheetName) => {
+      const sheet = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(sheet, {
+        header: 1,
+        defval: "",
+        raw: false,
+        blankrows: false,
+      });
+      const sheetRows = parseSheetRows(rows, sheetName);
 
-      allRows.push(...pageRows);
-      log(`${pageNumber}쪽: 텍스트 행 ${lines.length}개, 키워드 매칭 품목 ${pageRows.length}개`);
+      allRows.push(...sheetRows);
+      log(`${sheetName}: 행 ${rows.length}개, 키워드 매칭 품목 ${sheetRows.length}개`);
 
-      if (pageRows.length === 0) {
-        log(`읽힌 행 미리보기:\n${lines.slice(0, 20).join("\n")}`);
+      if (sheetRows.length === 0) {
+        log(`읽힌 행 미리보기:\n${previewRows(rows)}`);
       }
-    }
+    });
 
     state.rows = allRows.map((row, index) => ({ no: index + 1, ...row }));
     renderResults();
@@ -127,199 +128,129 @@ async function extractPdf() {
   }
 }
 
-async function loadPdfJs() {
-  if (window.pdfjsLib) return window.pdfjsLib;
-  const module = await import(PDFJS_URL);
-  window.pdfjsLib = module;
-  return module;
+async function loadXlsx() {
+  if (window.XLSX) return window.XLSX;
+
+  await new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = XLSX_URL;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error("엑셀 처리 라이브러리를 불러오지 못했습니다."));
+    document.head.append(script);
+  });
+
+  return window.XLSX;
 }
 
-function getPageLines(items) {
-  const textItems = items
-    .map((item) => {
-      const text = normalizeText(item.str);
-      const [, , , , x, y] = item.transform;
-      return { text, x, y };
-    })
-    .filter((item) => item.text);
-
-  const lines = [];
-  textItems
-    .sort((a, b) => b.y - a.y || a.x - b.x)
-    .forEach((item) => {
-      let line = lines.find((candidate) => Math.abs(candidate.y - item.y) <= 4);
-      if (!line) {
-        line = { y: item.y, items: [] };
-        lines.push(line);
-      }
-      line.items.push(item);
-      line.y = (line.y * (line.items.length - 1) + item.y) / line.items.length;
-    });
-
-  return lines
-    .map((line) => {
-      return line.items
-        .sort((a, b) => a.x - b.x)
-        .map((item) => item.text)
-        .join(" ")
-        .trim();
-    })
-    .filter(Boolean);
-}
-
-function parseGmarketByKeywords(lines, pageNumber) {
-  const fullText = lines.join("\n");
-  if (!hasKeyword(fullText, "상품명") || !hasKeyword(fullText, "공급가액")) {
-    return [];
-  }
-
-  const tableRows = parseKeywordTable(lines, pageNumber);
+function parseSheetRows(rows, sheetName) {
+  const tableRows = parseHeaderTable(rows, sheetName);
   if (tableRows.length > 0) {
-    log("키워드 규칙: 표 헤더를 찾고, 값 줄에서 공급가액과 수량을 매칭했습니다.");
+    log("엑셀 규칙: 헤더 행에서 상품명/필수선택/추가구성/수량/공급가액을 찾았습니다.");
     return tableRows;
   }
 
+  const blockRows = parseLabelBlocks(rows, sheetName);
+  if (blockRows.length > 0) {
+    log("엑셀 규칙: 라벨-값 구조에서 상품명/수량/공급가액을 찾았습니다.");
+    return blockRows;
+  }
+
+  return [];
+}
+
+function parseHeaderTable(rows, sheetName) {
+  const headerIndex = rows.findIndex((row) => {
+    return rowHas(row, "상품명") &&
+      rowHas(row, "수량") &&
+      rowHas(row, "공급가액");
+  });
+
+  if (headerIndex < 0) return [];
+
+  const headers = rows[headerIndex].map(normalizeHeader);
+  const columns = {
+    productName: findHeaderIndex(headers, "상품명"),
+    requiredOption: findHeaderIndex(headers, "필수선택"),
+    addOn: findHeaderIndex(headers, "추가구성"),
+    quantity: findHeaderIndex(headers, "수량"),
+    supplyAmount: findHeaderIndex(headers, "공급가액"),
+  };
+
+  return rows
+    .slice(headerIndex + 1)
+    .map((row) => rowFromTable(row, columns, sheetName))
+    .filter((row) => row.name && row.quantity && row.unitPrice);
+}
+
+function rowFromTable(row, columns, sheetName) {
+  const contents = [
+    cell(row, columns.productName),
+    cell(row, columns.requiredOption),
+    cell(row, columns.addOn),
+  ].map(cleanItemText).filter(Boolean);
+
+  const quantity = toNumber(cell(row, columns.quantity));
+  const supplyAmount = toNumber(cell(row, columns.supplyAmount));
+  const unitPrice = quantity && supplyAmount ? Math.round(supplyAmount / quantity) : null;
+
+  return {
+    name: contents.join(" / "),
+    spec: "개",
+    quantity,
+    unitPrice,
+    source: sheetName,
+  };
+}
+
+function parseLabelBlocks(rows, sheetName) {
   const blocks = [];
   let current = createBlock();
   let pendingLabel = null;
 
-  for (const line of lines) {
-    if (hasKeyword(line, "상품명") && hasBlockData(current)) {
+  rows.forEach((row) => {
+    const values = extractValuesFromRow(row);
+
+    if (values.productName && hasBlockData(current)) {
       blocks.push(current);
       current = createBlock();
       pendingLabel = null;
     }
 
-    const values = extractKeywordValues(line);
     if (Object.keys(values).length > 0) {
-      applyKeywordValues(current, values);
-      pendingLabel = findTrailingLabel(line);
-      continue;
+      applyValues(current, values);
+      pendingLabel = trailingLabel(row);
+      return;
     }
 
-    if (pendingLabel && !isSkippableLine(line)) {
-      applyKeywordValues(current, { [pendingLabel]: line });
+    if (pendingLabel && row.some((value) => cleanValue(value))) {
+      applyValues(current, { [pendingLabel]: firstText(row) });
       pendingLabel = null;
     }
-  }
+  });
 
-  if (hasBlockData(current)) {
-    blocks.push(current);
-  }
+  if (hasBlockData(current)) blocks.push(current);
 
-  const rows = blocks
-    .map((block) => blockToRow(block, pageNumber))
+  return blocks
+    .map((block) => blockToRow(block, sheetName))
     .filter((row) => row.name && row.quantity && row.unitPrice);
-
-  if (rows.length > 0) {
-    log("키워드 규칙: 상품명/필수선택/추가구성은 내용으로 합치고, 예상단가는 할인금액 없이 공급가액 ÷ 수량으로 계산했습니다.");
-  }
-
-  return rows;
 }
 
-function parseKeywordTable(lines, pageNumber) {
-  const headerIndex = lines.findIndex((line) => {
-    return hasKeyword(line, "상품명") &&
-      hasKeyword(line, "수량") &&
-      hasKeyword(line, "공급가액");
-  });
-
-  if (headerIndex < 0) return [];
-
-  const headerLine = lines[headerIndex];
-  const hasDiscount = hasKeyword(headerLine, "할인금액");
-  const rows = [];
-
-  for (const line of lines.slice(headerIndex + 1)) {
-    if (isSkippableLine(line) || hasKeyword(line, "상품명")) continue;
-
-    const row = parseValueOnlyLine(line, pageNumber, hasDiscount);
-    if (row.name && row.quantity && row.unitPrice) {
-      rows.push(row);
-    }
-  }
-
-  return rows;
-}
-
-function parseValueOnlyLine(line, pageNumber, hasDiscount) {
-  const moneyMatches = [...line.matchAll(/-?\d[\d,]*\s*원?/g)]
-    .map((match) => ({
-      text: match[0],
-      index: match.index,
-      value: toNumber(match[0]),
-    }))
-    .filter((match) => {
-      return Number.isFinite(match.value) &&
-        (match.value >= 100 || match.text.includes(","));
-    });
-
-  if (moneyMatches.length === 0) return emptyRow(pageNumber);
-
-  const supplyMatch = chooseSupplyAmount(moneyMatches, hasDiscount);
-
-  const beforeSupply = line.slice(0, supplyMatch.index).trim();
-  const beforeTokens = beforeSupply.split(/\s+/).filter(Boolean);
-  const quantityTokenIndex = findLastIndex(beforeTokens, (token) => {
-    const value = toNumber(token);
-    return Number.isInteger(value) && value > 0 && value < 100000;
-  });
-
-  if (quantityTokenIndex < 0) return emptyRow(pageNumber);
-
-  const quantity = toNumber(beforeTokens[quantityTokenIndex]);
-  const name = beforeTokens
-    .slice(0, quantityTokenIndex)
-    .filter((token) => !isUnitLike(token))
-    .join(" ");
-
-  return {
-    name: cleanGmarketName(name),
-    spec: "개",
-    quantity,
-    unitPrice: Math.round(supplyMatch.value / quantity),
-    page: pageNumber,
-  };
-}
-
-function chooseSupplyAmount(moneyMatches, hasDiscount) {
-  if (moneyMatches.length === 1) return moneyMatches[0];
-
-  const positiveMatches = moneyMatches.filter((match) => match.value > 0);
-  if (positiveMatches.length === 0) return moneyMatches[moneyMatches.length - 1];
-
-  if (hasDiscount && positiveMatches.length >= 3) {
-    return positiveMatches[positiveMatches.length - 2];
-  }
-
-  return positiveMatches.reduce((best, match) => {
-    return match.value > best.value ? match : best;
-  }, positiveMatches[0]);
-}
-
-function extractKeywordValues(line) {
-  const matches = [...line.matchAll(labelRegex())];
-  if (matches.length === 0) return {};
-
+function extractValuesFromRow(row) {
   const values = {};
-  matches.forEach((match, index) => {
-    const label = canonicalLabel(match[0]);
-    const start = match.index + match[0].length;
-    const end = matches[index + 1]?.index ?? line.length;
-    const value = cleanValue(line.slice(start, end));
 
-    if (value) {
-      values[label] = value;
-    } else if (!values[label]) {
-      values[label] = "";
-    }
+  row.forEach((value, index) => {
+    const label = canonicalLabel(value);
+    if (!label) return;
+
+    const inlineValue = textAfterLabel(value);
+    const nextValue = inlineValue || nextMeaningfulCell(row, index + 1);
+    if (nextValue) values[label] = nextValue;
   });
 
   return values;
 }
 
-function applyKeywordValues(block, values) {
+function applyValues(block, values) {
   if (values.productName) pushUnique(block.contents, values.productName);
   if (values.requiredOption) pushUnique(block.contents, values.requiredOption);
   if (values.addOn) pushUnique(block.contents, values.addOn);
@@ -331,17 +262,17 @@ function applyKeywordValues(block, values) {
   if (supplyAmount) block.supplyAmount = supplyAmount;
 }
 
-function blockToRow(block, pageNumber) {
+function blockToRow(block, sheetName) {
   const unitPrice = block.quantity && block.supplyAmount
     ? Math.round(block.supplyAmount / block.quantity)
     : null;
 
   return {
-    name: cleanGmarketName(block.contents.join(" / ")),
+    name: block.contents.map(cleanItemText).filter(Boolean).join(" / "),
     spec: "개",
     quantity: block.quantity,
     unitPrice,
-    page: pageNumber,
+    source: sheetName,
   };
 }
 
@@ -357,70 +288,79 @@ function hasBlockData(block) {
   return block.contents.length > 0 || block.quantity || block.supplyAmount;
 }
 
-function findTrailingLabel(line) {
-  const matches = [...line.matchAll(labelRegex())];
-  if (matches.length === 0) return null;
-
-  const last = matches[matches.length - 1];
-  const afterLast = cleanValue(line.slice(last.index + last[0].length));
-  return afterLast ? null : canonicalLabel(last[0]);
+function trailingLabel(row) {
+  const lastText = [...row].reverse().find((value) => cleanValue(value));
+  return canonicalLabel(lastText);
 }
 
-function labelRegex() {
-  return /(상\s*품\s*명|필\s*수\s*선\s*택|추\s*가\s*구\s*성|수\s*량|공\s*급\s*가\s*액|할\s*인\s*금\s*액)/g;
+function canonicalLabel(value) {
+  const text = compactText(value);
+  if (text.includes("상품명")) return "productName";
+  if (text.includes("필수선택")) return "requiredOption";
+  if (text.includes("추가구성")) return "addOn";
+  if (text === "수량" || text.includes("구매수량")) return "quantity";
+  if (text.includes("공급가액")) return "supplyAmount";
+  return null;
 }
 
-function canonicalLabel(label) {
-  const compact = compactText(label);
-  if (compact === "상품명") return "productName";
-  if (compact === "필수선택") return "requiredOption";
-  if (compact === "추가구성") return "addOn";
-  if (compact === "수량") return "quantity";
-  if (compact === "공급가액") return "supplyAmount";
-  return "ignored";
+function findHeaderIndex(headers, label) {
+  return headers.findIndex((header) => header.includes(compactText(label)));
 }
 
-function hasKeyword(text, keyword) {
-  return compactText(text).includes(compactText(keyword));
+function rowHas(row, keyword) {
+  return row.some((value) => compactText(value).includes(compactText(keyword)));
 }
 
-function isSkippableLine(line) {
-  return hasKeyword(line, "할인금액") ||
-    /합계|총\s*금액|총금액|판매가|배송비|결제금액|주문금액/.test(line);
+function cell(row, index) {
+  return index >= 0 ? cleanValue(row[index]) : "";
 }
 
-function isUnitLike(text) {
-  return /^(개|EA|ea|pcs?|PCS?)$/.test(normalizeText(text));
+function firstText(row) {
+  return cleanValue(row.find((value) => cleanValue(value)) || "");
 }
 
-function emptyRow(pageNumber) {
-  return {
-    name: "",
-    spec: "개",
-    quantity: null,
-    unitPrice: null,
-    page: pageNumber,
-  };
+function nextMeaningfulCell(row, startIndex) {
+  for (let index = startIndex; index < row.length; index += 1) {
+    const value = cleanValue(row[index]);
+    if (value && !canonicalLabel(value)) return value;
+    if (canonicalLabel(value)) return "";
+  }
+  return "";
+}
+
+function textAfterLabel(value) {
+  const text = cleanValue(value);
+  const match = text.match(/^(상품명|필수\s*선택|필수선택|추가\s*구성|추가구성|수량|구매\s*수량|구매수량|공급\s*가액|공급가액)\s*[:：|\-]?\s*(.+)$/);
+  return match ? cleanValue(match[2]) : "";
 }
 
 function pushUnique(values, value) {
-  const cleaned = cleanGmarketName(value);
-  if (cleaned && !values.includes(cleaned)) {
-    values.push(cleaned);
-  }
+  const cleaned = cleanItemText(value);
+  if (cleaned && !values.includes(cleaned)) values.push(cleaned);
 }
 
-function cleanGmarketName(text) {
-  return cleanValue(text)
+function cleanItemText(value) {
+  return cleanValue(value)
     .replace(/^(선택|없음|해당없음|무료|기본)\s*$/g, "")
     .replace(/\s*\/\s*$/g, "");
 }
 
-function cleanValue(text) {
-  return normalizeText(text)
+function cleanValue(value) {
+  return normalizeText(value)
     .replace(/^[:：|\-\s]+/, "")
-    .replace(/^\[[^\]]+\]\s*/, "")
     .trim();
+}
+
+function normalizeHeader(value) {
+  return compactText(value);
+}
+
+function previewRows(rows) {
+  return rows
+    .slice(0, 15)
+    .map((row, index) => `${index + 1}: ${row.map(cleanValue).filter(Boolean).join(" | ")}`)
+    .filter((line) => !line.endsWith(": "))
+    .join("\n");
 }
 
 function renderResults() {
@@ -429,7 +369,7 @@ function renderResults() {
   els.downloadCsv.disabled = state.rows.length === 0;
 
   if (state.rows.length === 0) {
-    els.resultBody.innerHTML = `<tr class="empty-row"><td colspan="6">추출된 품목이 없습니다. 추출 로그에서 PDF 텍스트를 확인해 주세요.</td></tr>`;
+    els.resultBody.innerHTML = `<tr class="empty-row"><td colspan="6">추출된 품목이 없습니다. 추출 로그에서 엑셀 내용을 확인해 주세요.</td></tr>`;
     return;
   }
 
@@ -440,7 +380,7 @@ function renderResults() {
       <td>${escapeHtml(row.spec)}</td>
       <td>${row.quantity ?? ""}</td>
       <td>${formatNumber(row.unitPrice)}</td>
-      <td>${row.page}</td>
+      <td>${escapeHtml(row.source)}</td>
     </tr>
   `).join("");
 }
@@ -449,49 +389,42 @@ function clearResults() {
   state.rows = [];
   state.debug = [];
   els.resultTitle.textContent = "품목 0개";
-  els.resultBody.innerHTML = `<tr class="empty-row"><td colspan="6">PDF를 업로드하면 품목이 여기에 표시됩니다.</td></tr>`;
+  els.resultBody.innerHTML = `<tr class="empty-row"><td colspan="6">엑셀 파일을 업로드하면 품목이 여기에 표시됩니다.</td></tr>`;
   els.copyJson.disabled = true;
   els.downloadCsv.disabled = true;
   els.debugLog.textContent = "";
-  setStatus(state.file ? `${state.file.name} 선택됨.` : "아직 선택된 PDF가 없습니다.");
+  setStatus(state.file ? `${state.file.name} 선택됨.` : "아직 선택된 엑셀 파일이 없습니다.");
 }
 
 function toCsv(rows) {
-  const header = ["순번", "내용", "규격", "수량", "예상단가", "페이지"];
+  const header = ["순번", "내용", "규격", "수량", "예상단가", "시트"];
   const body = rows.map((row) => [
     row.no,
     row.name,
     row.spec,
     row.quantity ?? "",
     row.unitPrice ?? "",
-    row.page,
+    row.source,
   ]);
 
   return [header, ...body]
-    .map((line) => line.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(","))
+    .map((line) => line.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(","))
     .join("\n");
 }
 
-function normalizeText(text) {
-  return String(text).replace(/\s+/g, " ").trim();
+function normalizeText(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
-function compactText(text) {
-  return normalizeText(text).replace(/\s+/g, "");
+function compactText(value) {
+  return normalizeText(value).replace(/\s+/g, "");
 }
 
-function toNumber(text) {
-  const normalized = normalizeText(text).replace(/[^\d.-]/g, "");
+function toNumber(value) {
+  const normalized = normalizeText(value).replace(/[^\d.-]/g, "");
   if (!normalized) return null;
-  const value = Number(normalized);
-  return Number.isFinite(value) ? value : null;
-}
-
-function findLastIndex(items, predicate) {
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    if (predicate(items[index])) return index;
-  }
-  return -1;
+  const number = Number(normalized);
+  return Number.isFinite(number) ? number : null;
 }
 
 function formatNumber(value) {

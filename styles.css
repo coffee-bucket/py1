@@ -32,6 +32,14 @@ input {
   font: inherit;
 }
 
+.file-input {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .app {
   width: min(1180px, calc(100% - 32px));
   margin: 0 auto;
@@ -123,13 +131,6 @@ h2 {
 .dropzone:hover {
   border-color: var(--green);
   background: #eef8f3;
-}
-
-.dropzone input {
-  position: absolute;
-  inline-size: 1px;
-  block-size: 1px;
-  opacity: 0;
 }
 
 .upload-icon {
