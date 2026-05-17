@@ -193,11 +193,11 @@ function parseHeaderTable(rows, sheetName) {
 }
 
 function rowFromTable(row, columns, sheetName) {
-  const contents = [
+  const contents = uniqueItemTexts([
     cell(row, columns.productName),
     cell(row, columns.requiredOption),
     cell(row, columns.addOn),
-  ].map(cleanItemText).filter(Boolean);
+  ]);
 
   const quantity = toNumber(cell(row, columns.quantity));
   const supplyAmount = toNumber(cell(row, columns.supplyAmount));
@@ -279,7 +279,7 @@ function blockToRow(block, sheetName) {
     : null;
 
   return {
-    name: block.contents.map(cleanItemText).filter(Boolean).join(" / "),
+    name: uniqueItemTexts(block.contents).join(" / "),
     spec: "개",
     quantity: block.quantity,
     unitPrice,
@@ -348,7 +348,28 @@ function textAfterLabel(value) {
 
 function pushUnique(values, value) {
   const cleaned = cleanItemText(value);
-  if (cleaned && !values.includes(cleaned)) values.push(cleaned);
+  const key = itemKey(cleaned);
+  if (cleaned && !values.some((existing) => itemKey(existing) === key)) {
+    values.push(cleaned);
+  }
+}
+
+function uniqueItemTexts(values) {
+  const result = [];
+  values.forEach((value) => pushUnique(result, value));
+  return result.filter((value, index, list) => {
+    const key = itemKey(value);
+    return !list.some((other, otherIndex) => {
+      const otherKey = itemKey(other);
+      return otherIndex !== index &&
+        otherKey.length > key.length &&
+        otherKey.includes(key);
+    });
+  });
+}
+
+function itemKey(value) {
+  return compactText(cleanItemText(value)).toLowerCase();
 }
 
 function cleanItemText(value) {
